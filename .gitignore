@@ -1,0 +1,21 @@
+# Google auth - NEVER commit these
+credentials.json
+token.pickle
+token_b64.txt
+
+# Environment
+.env
+
+# Temp files
+downloads/
+output/
+*.mp4
+*.mp3
+*.wav
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
