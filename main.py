@@ -41,10 +41,6 @@ def main():
     now = datetime.now(CENTRAL_TZ)
     print(f"🕐 Current time: {now.strftime('%A %B %d, %Y %I:%M %p CT')}")
 
-    if not is_active_hours():
-        print("⏸️  Outside active hours (Mon–Fri 10am–5pm CT). Exiting.")
-        sys.exit(0)
-
     if not DRIVE_FOLDER_ID:
         print("❌ DRIVE_FOLDER_ID environment variable not set.")
         sys.exit(1)

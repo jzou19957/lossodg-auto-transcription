@@ -2,10 +2,8 @@ name: Video to Subtitles
 
 on:
   schedule:
-    # Runs every 5 minutes, Mon–Fri (active hours check is done in main.py)
-    # GitHub Actions cron is UTC — 10am–5pm CT = 3pm–10pm UTC (CST) / 2pm–9pm UTC (CDT)
-    # We schedule broadly (2pm–10pm UTC) and let main.py enforce the exact CT window
-    - cron: '*/5 14-22 * * 1-5'
+    # Runs every 5 minutes, 24/7 — active hours check removed
+    - cron: '*/5 * * * *'
 
   # Allow manual trigger from GitHub Actions UI for testing
   workflow_dispatch:
