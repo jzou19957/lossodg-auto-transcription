@@ -8,11 +8,16 @@ from downloader import get_gmail_service
 
 
 def send_srt_email(srt_path, video_name, recipient_email):
-    """Send the .srt file as an email attachment via Gmail API."""
+    """Send the .srt file as an email attachment via Gmail API.
+    recipient_email can be a single address or comma-separated list.
+    """
     service = get_gmail_service()
 
+    # Support multiple recipients separated by comma
+    recipients = [r.strip() for r in recipient_email.split(',')]
+
     msg = MIMEMultipart()
-    msg['To'] = recipient_email
+    msg['To'] = ', '.join(recipients)
     msg['Subject'] = f"✅ Subtitles ready: {video_name}"
 
     body = f"""Hi,
