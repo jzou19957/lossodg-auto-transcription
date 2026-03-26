@@ -3,29 +3,28 @@ main.py — Entry point for GitHub Actions.
 
 Flow:
   1. Check active hours (Mon–Fri 10am–5pm CT) — exit early if outside
-  2. Scan Drive folder for .mp4 files
-  3. Load processed_log.txt from Drive (tracks fully completed videos)
-  4. Skip any video already in the log (transcribed + uploaded + emailed)
-  5. For each unprocessed video:
+  2. Scan Drive folder for .mp4 files not yet fully processed
+  3. A video is "fully done" only if all 3 steps succeeded:
+       transcribed → .srt uploaded to Drive → emailed
+     This is tracked by a .sent marker file in Drive (e.g. 03_26_26.sent)
+  4. For each unprocessed video:
      a. Download from Drive
      b. Transcribe with Whisper (medium)
      c. Upload .srt back to Drive
      d. Email .srt to recipient
-     e. Mark as done in processed_log.txt on Drive
+     e. Upload .sent marker to Drive (confirms full completion)
      f. Clean up local temp files
+  5. If no videos found → exit immediately (cron re-triggers in 5 min)
+  6. If a step fails → no .sent written → video retried next run
 """
 
 import os
 import sys
-import io
 import pytz
 from datetime import datetime
 from dotenv import load_dotenv
 
-from downloader import (
-    list_all_videos, download_video, upload_srt_to_drive,
-    load_processed_log, save_processed_log, get_drive_service
-)
+from downloader import list_unprocessed_videos, download_video, upload_srt_to_drive, mark_as_sent
 from transcriber import transcribe_to_srt
 from emailer import send_srt_email
 
@@ -37,16 +36,21 @@ CENTRAL_TZ       = pytz.timezone('America/Chicago')
 
 
 def is_active_hours():
-    """Returns True if Mon–Fri 10am–5pm Central."""
+    """Returns True if current time is Mon–Fri 10am–5pm Central."""
     now = datetime.now(CENTRAL_TZ)
     return now.weekday() < 5 and 10 <= now.hour < 17
 
 
-def process_video(video, processed_log):
+def process_video(video):
     """
-    Download, transcribe, upload, email one video.
-    Only marks as done if ALL steps succeed.
-    Returns True on full success.
+    Run all 4 steps for one video:
+      1. Download from Drive
+      2. Transcribe with Whisper → .srt file
+      3. Upload .srt to Drive
+      4. Email .srt to recipient
+      5. Upload .sent marker (only if all above succeed)
+
+    Returns True if fully complete, False if any step failed.
     """
     file_id   = video['id']
     file_name = video['name']
@@ -62,33 +66,32 @@ def process_video(video, processed_log):
     try:
         # Step 1: Download
         video_path = download_video(file_id, file_name)
-        print(f"   ✅ Step 1/3 — Downloaded")
+        print("   ✅ Step 1/4 — Downloaded")
 
         # Step 2: Transcribe
         srt_path, base_name = transcribe_to_srt(video_path, model_size='medium')
-        print(f"   ✅ Step 2/3 — Transcribed")
+        print("   ✅ Step 2/4 — Transcribed")
 
         # Step 3: Upload .srt to Drive
         upload_srt_to_drive(srt_path, DRIVE_FOLDER_ID)
-        print(f"   ✅ Step 3a — Uploaded to Drive")
+        print("   ✅ Step 3/4 — .srt uploaded to Drive")
 
         # Step 4: Email
         send_srt_email(srt_path, file_name, RECIPIENT_EMAIL)
-        print(f"   ✅ Step 3b — Emailed")
+        print("   ✅ Step 4/4 — Emailed")
 
-        # ALL steps succeeded — mark as done in log
-        processed_log.add(file_name)
-        save_processed_log(processed_log, DRIVE_FOLDER_ID)
-        print(f"   ✅ Marked as fully done in processed_log.txt")
-        print(f"✅ {file_name} → complete!")
+        # All steps succeeded — write .sent marker so this video is never re-processed
+        mark_as_sent(base_name, DRIVE_FOLDER_ID)
+        print(f"✅ {file_name} → fully complete!")
         return True
 
     except Exception as e:
-        print(f"❌ Failed during processing of {file_name}: {e}")
-        print(f"   ⚠️  NOT marked as done — will retry next run")
+        print(f"❌ Error processing {file_name}: {e}")
+        print("   ⚠️  No .sent marker written — will retry next run")
         return False
 
     finally:
+        # Always clean up local temp files regardless of success/failure
         for path in [video_path, srt_path]:
             if path and os.path.exists(path):
                 os.remove(path)
@@ -99,38 +102,33 @@ def main():
     now = datetime.now(CENTRAL_TZ)
     print(f"🕐 Current time: {now.strftime('%A %B %d, %Y %I:%M %p CT')}")
 
+    # Gate 1: Active hours check
     if not is_active_hours():
         print("💤 Outside active hours (Mon–Fri 10am–5pm CT). Exiting.")
         sys.exit(0)
 
+    # Gate 2: Env var check
     if not DRIVE_FOLDER_ID:
         print("❌ DRIVE_FOLDER_ID environment variable not set.")
         sys.exit(1)
 
     print(f"🚀 Scanning Drive folder: {DRIVE_FOLDER_ID}")
     print(f"📧 Recipient: {RECIPIENT_EMAIL}")
+    print()
 
-    # Load the log of fully-completed videos from Drive
-    processed_log = load_processed_log(DRIVE_FOLDER_ID)
-    print(f"📋 {len(processed_log)} video(s) already fully processed in log")
+    # Find videos not yet fully processed (no matching .sent file)
+    videos = list_unprocessed_videos(DRIVE_FOLDER_ID)
 
-    # Get all .mp4s, filter out ones already fully done
-    all_videos  = list_all_videos(DRIVE_FOLDER_ID)
-    unprocessed = [v for v in all_videos if v['name'] not in processed_log]
-
-    print(f"📂 Found {len(all_videos)} total video(s), "
-          f"{len(unprocessed)} need processing")
-
-    if not unprocessed:
-        print("✅ Nothing to process — all videos fully completed "
-              "(transcribed + uploaded + emailed).")
+    if not videos:
+        print("✅ Nothing to process — all videos fully complete.")
+        print("   (cron will re-check in 5 minutes)")
         sys.exit(0)
 
     success_count = 0
     fail_count    = 0
 
-    for video in unprocessed:
-        if process_video(video, processed_log):
+    for video in videos:
+        if process_video(video):
             success_count += 1
         else:
             fail_count += 1
