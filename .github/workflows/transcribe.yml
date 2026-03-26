@@ -1,18 +1,13 @@
 name: Video to Subtitles
-
 on:
   schedule:
-    # Runs every 5 minutes, 24/7 — active hours check removed
     - cron: '*/5 * * * *'
-
-  # Allow manual trigger from GitHub Actions UI for testing
   workflow_dispatch:
 
 jobs:
   transcribe:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # Max 1hr per run (long videos)
-
+    timeout-minutes: 360
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
