@@ -5,27 +5,58 @@ Completion tracking uses .sent marker files in Drive:
   - 03_24_26.mp4 is "fully done" when 03_24_26.sent exists in the same folder
   - .sent file is only created after transcribe + upload + email ALL succeed
   - This matches the .sent files already in your Drive folder
+
+Auth split:
+  - Google Drive  → Service Account (never expires, stable in CI)
+  - Gmail sending → OAuth token (personal Gmail, stored as GOOGLE_TOKEN_B64)
 """
 
 import os
 import io
+import json
 import base64
 import pickle
 from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaIoBaseUpload
 
-SCOPES = [
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/gmail.send'
-]
 
+# ── Drive Auth (Service Account) ──────────────────────────────────────────────
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
-
-def get_credentials():
+def get_drive_service():
     """
-    Load Google credentials.
+    Return an authenticated Google Drive API client using a Service Account.
+    - In GitHub Actions: reads from GOOGLE_SERVICE_ACCOUNT_B64 environment variable
+    - Locally: reads from service_account.json file
+    Service accounts never expire — no token refresh needed.
+    """
+    SCOPES = ['https://www.googleapis.com/auth/drive']
+
+    sa_b64 = os.environ.get('GOOGLE_SERVICE_ACCOUNT_B64')
+    if sa_b64:
+        sa_info = json.loads(base64.b64decode(sa_b64).decode('utf-8'))
+    elif os.path.exists('service_account.json'):
+        with open('service_account.json', 'r') as f:
+            sa_info = json.load(f)
+    else:
+        raise RuntimeError(
+            "No service account credentials found.\n"
+            "Either set GOOGLE_SERVICE_ACCOUNT_B64 in GitHub Secrets,\n"
+            "or place service_account.json in the project folder for local use."
+        )
+
+    credentials = service_account.Credentials.from_service_account_info(
+        sa_info, scopes=SCOPES
+    )
+    return build('drive', 'v3', credentials=credentials)
+
+
+# ── Gmail Auth (OAuth token) ───────────────────────────────────────────────────
+
+def get_gmail_credentials():
+    """
+    Load Gmail OAuth credentials.
     - In GitHub Actions: reads from GOOGLE_TOKEN_B64 environment variable
     - Locally: reads from token.pickle file
     Refreshes token automatically if expired.
@@ -44,21 +75,16 @@ def get_credentials():
 
     if not creds or not creds.valid:
         raise RuntimeError(
-            "No valid credentials found.\n"
+            "No valid Gmail credentials found.\n"
             "Run auth_setup.py locally to generate token.pickle,\n"
             "then encode it as GOOGLE_TOKEN_B64 in GitHub Secrets."
         )
     return creds
 
 
-def get_drive_service():
-    """Return an authenticated Google Drive API client."""
-    return build('drive', 'v3', credentials=get_credentials())
-
-
 def get_gmail_service():
     """Return an authenticated Gmail API client."""
-    return build('gmail', 'v1', credentials=get_credentials())
+    return build('gmail', 'v1', credentials=get_gmail_credentials())
 
 
 # ── Drive scanning ────────────────────────────────────────────────────────────
