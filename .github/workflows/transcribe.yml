@@ -5,7 +5,6 @@ on:
     # During Central Daylight Time (UTC-5), that is 15:00-23:59 UTC
     - cron: '*/15 15-23 * * 1-5'
   workflow_dispatch:
-
 jobs:
   transcribe:
     runs-on: ubuntu-latest
@@ -13,24 +12,21 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
       - name: Install system dependencies (ffmpeg)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
-
       - name: Install Python dependencies
         run: pip install -r requirements.txt
-
       - name: Run transcription bot
         env:
           GOOGLE_TOKEN_B64: ${{ secrets.GOOGLE_TOKEN_B64 }}
+          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: python main.py
