@@ -1,28 +1,38 @@
 name: Video to Subtitles
+
 on:
   schedule:
-    # Every 15 minutes, Mon-Fri, 10am-6pm Central
-    # During Central Daylight Time (UTC-5), that is 15:00-23:59 UTC
-    - cron: '*/15 15-23 * * 1-5'
+    # Runs every 5 minutes, Mon–Fri (active hours check is done in main.py)
+    # GitHub Actions cron is UTC — 10am–5pm CT = 3pm–10pm UTC (CST) / 2pm–9pm UTC (CDT)
+    # We schedule broadly (2pm–10pm UTC) and let main.py enforce the exact CT window
+    - cron: '*/5 14-22 * * 1-5'
+
+  # Allow manual trigger from GitHub Actions UI for testing
   workflow_dispatch:
+
 jobs:
   transcribe:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60   # Max 1hr per run (long videos)
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+
       - name: Install system dependencies (ffmpeg)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
+
       - name: Run transcription bot
         env:
           GOOGLE_TOKEN_B64: ${{ secrets.GOOGLE_TOKEN_B64 }}

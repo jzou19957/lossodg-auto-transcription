@@ -7,8 +7,9 @@ Completion tracking uses .sent marker files in Drive:
   - This matches the .sent files already in your Drive folder
 
 Auth split:
-  - Google Drive  → Service Account (never expires, stable in CI)
-  - Gmail sending → OAuth token (personal Gmail, stored as GOOGLE_TOKEN_B64)
+  - Drive scanning + downloading → Service Account (never expires)
+  - Drive uploading (.srt, .sent) → OAuth token (has storage quota)
+  - Gmail sending                 → OAuth token
 """
 
 import os
@@ -22,14 +23,13 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaIoBaseUpload
 
 
-# ── Drive Auth (Service Account) ──────────────────────────────────────────────
+# ── Service Account Auth (scanning + downloading) ─────────────────────────────
 
 def get_drive_service():
     """
-    Return an authenticated Google Drive API client using a Service Account.
-    - In GitHub Actions: reads from GOOGLE_SERVICE_ACCOUNT_B64 environment variable
+    Return a Drive client using Service Account — for scanning and downloading.
+    - In GitHub Actions: reads from GOOGLE_SERVICE_ACCOUNT_B64 env var
     - Locally: reads from service_account.json file
-    Service accounts never expire — no token refresh needed.
     """
     SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -52,14 +52,13 @@ def get_drive_service():
     return build('drive', 'v3', credentials=credentials)
 
 
-# ── Gmail Auth (OAuth token) ───────────────────────────────────────────────────
+# ── OAuth Auth (uploading + Gmail) ────────────────────────────────────────────
 
-def get_gmail_credentials():
+def get_oauth_credentials():
     """
-    Load Gmail OAuth credentials.
-    - In GitHub Actions: reads from GOOGLE_TOKEN_B64 environment variable
+    Load OAuth credentials for uploading to Drive and sending Gmail.
+    - In GitHub Actions: reads from GOOGLE_TOKEN_B64 env var
     - Locally: reads from token.pickle file
-    Refreshes token automatically if expired.
     """
     creds = None
 
@@ -75,16 +74,21 @@ def get_gmail_credentials():
 
     if not creds or not creds.valid:
         raise RuntimeError(
-            "No valid Gmail credentials found.\n"
+            "No valid OAuth credentials found.\n"
             "Run auth_setup.py locally to generate token.pickle,\n"
             "then encode it as GOOGLE_TOKEN_B64 in GitHub Secrets."
         )
     return creds
 
 
+def get_drive_upload_service():
+    """Return a Drive client using OAuth — for uploading files."""
+    return build('drive', 'v3', credentials=get_oauth_credentials())
+
+
 def get_gmail_service():
     """Return an authenticated Gmail API client."""
-    return build('gmail', 'v1', credentials=get_gmail_credentials())
+    return build('gmail', 'v1', credentials=get_oauth_credentials())
 
 
 # ── Drive scanning ────────────────────────────────────────────────────────────
@@ -160,11 +164,10 @@ def download_video(file_id, file_name, output_dir='./downloads'):
 
 def upload_srt_to_drive(srt_path, folder_id):
     """
-    Upload a .srt file to the Drive folder.
-    This is the subtitle backup copy stored alongside the original video.
+    Upload a .srt file to the Drive folder using OAuth (has storage quota).
     Returns the uploaded file's Drive ID.
     """
-    service = get_drive_service()
+    service = get_drive_upload_service()
     file_name = os.path.basename(srt_path)
 
     file_metadata = {'name': file_name, 'parents': [folder_id]}
@@ -182,15 +185,13 @@ def upload_srt_to_drive(srt_path, folder_id):
 
 def mark_as_sent(base_name, folder_id):
     """
-    Upload a tiny .sent marker file to Drive to record full completion.
+    Upload a tiny .sent marker file to Drive using OAuth.
 
     Example: base_name='03_26_26' → uploads '03_26_26.sent'
 
-    This file is checked on every run — if it exists, the matching .mp4
-    is skipped forever. Only written after ALL steps succeed:
-    transcribe + upload + email.
+    Only written after ALL steps succeed: transcribe + upload + email.
     """
-    service = get_drive_service()
+    service = get_drive_upload_service()
     sent_name = f"{base_name}.sent"
 
     media = MediaIoBaseUpload(
