@@ -4,16 +4,17 @@ main.py — Entry point for GitHub Actions.
 Flow:
   1. Check active hours (Mon–Fri 10am–5pm CT) — exit early if outside
   2. Scan Drive folder for .mp4 files not yet fully processed
-  3. A video is "fully done" only if all 3 steps succeeded:
-       transcribed → .srt uploaded to Drive → emailed
+  3. A video is "fully done" only if all processing steps succeeded:
+       transcribed → auto-aligned → .srt uploaded to Drive → emailed
      This is tracked by a .sent marker file in Drive (e.g. 03_26_26.sent)
   4. For each unprocessed video:
      a. Download from Drive
      b. Transcribe with Whisper (medium)
-     c. Upload .srt back to Drive
-     d. Email .srt to recipient
-     e. Upload .sent marker to Drive (confirms full completion)
-     f. Clean up local temp files
+      c. Auto-align the .srt so the first spoken subtitle starts at 00:00:00,000
+      d. Upload .srt back to Drive
+      e. Email .srt to recipient
+      f. Upload .sent marker to Drive (confirms full completion)
+      g. Clean up local temp files
   5. If no videos found → exit immediately (cron re-triggers in 5 min)
   6. If a step fails → no .sent written → video retried next run
 """
@@ -27,6 +28,7 @@ from dotenv import load_dotenv
 from downloader import list_unprocessed_videos, download_video, upload_srt_to_drive, mark_as_sent
 from transcriber import transcribe_to_srt
 from emailer import send_srt_email
+from subtitle_adjuster import format_timestamp, shift_srt_to_zero
 
 load_dotenv()
 
@@ -43,12 +45,13 @@ def is_active_hours():
 
 def process_video(video):
     """
-    Run all 4 steps for one video:
+    Run all processing steps for one video:
       1. Download from Drive
       2. Transcribe with Whisper → .srt file
-      3. Upload .srt to Drive
-      4. Email .srt to recipient
-      5. Upload .sent marker (only if all above succeed)
+      3. Auto-align subtitles so the first spoken cue starts at 00:00:00,000
+      4. Upload .srt to Drive
+      5. Email .srt to recipient
+      6. Upload .sent marker (only if all above succeed)
 
     Returns True if fully complete, False if any step failed.
     """
@@ -66,19 +69,28 @@ def process_video(video):
     try:
         # Step 1: Download
         video_path = download_video(file_id, file_name)
-        print("   ✅ Step 1/4 — Downloaded")
+        print("   ✅ Step 1/5 — Downloaded")
 
         # Step 2: Transcribe
         srt_path, base_name = transcribe_to_srt(video_path, model_size='medium')
-        print("   ✅ Step 2/4 — Transcribed")
+        print("   ✅ Step 2/5 — Transcribed")
 
-        # Step 3: Upload .srt to Drive
+        # Step 3: Auto-align subtitles to the first spoken cue
+        shift_ms, first_cue_text = shift_srt_to_zero(srt_path)
+        if shift_ms > 0:
+            print(f"   ✅ Step 3/5 — Auto-aligned subtitles by {format_timestamp(shift_ms)}")
+            if first_cue_text:
+                print(f"      First cue at zero: {first_cue_text}")
+        else:
+            print("   ✅ Step 3/5 — No timestamp adjustment needed")
+
+        # Step 4: Upload .srt to Drive
         upload_srt_to_drive(srt_path, DRIVE_FOLDER_ID)
-        print("   ✅ Step 3/4 — .srt uploaded to Drive")
+        print("   ✅ Step 4/5 — .srt uploaded to Drive")
 
-        # Step 4: Email
+        # Step 5: Email
         send_srt_email(srt_path, file_name, RECIPIENT_EMAIL)
-        print("   ✅ Step 4/4 — Emailed")
+        print("   ✅ Step 5/5 — Emailed")
 
         # All steps succeeded — write .sent marker so this video is never re-processed
         mark_as_sent(base_name, DRIVE_FOLDER_ID)

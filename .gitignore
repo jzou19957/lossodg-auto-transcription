@@ -2,6 +2,10 @@
 credentials.json
 token.pickle
 token_b64.txt
+sa_b64.txt
+service_account.json
+*.service-account.json
+video-to-subtitles-*.json
 
 # Environment
 .env
