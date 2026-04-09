@@ -2,8 +2,8 @@
 auth_setup.py — Run this ONCE locally to authenticate with Google.
 
 This opens a browser window for you to log in with your Google account.
-It saves a token.pickle file which you then encode and store as a
-GitHub Secret (GOOGLE_TOKEN_B64) so GitHub Actions can use it.
+It saves token files which you then encode and store as a GitHub Secret
+(GOOGLE_TOKEN_B64) so GitHub Actions can use it.
 
 Usage:
     python auth_setup.py
@@ -19,7 +19,6 @@ import base64
 from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 
 SCOPES = [
     'https://www.googleapis.com/auth/drive',
@@ -46,7 +45,7 @@ def main():
             try:
                 creds.refresh(Request())
             except RefreshError:
-                print("⚠️  Existing token.pickle is expired or revoked.")
+                print("⚠️  Existing local OAuth token is expired or revoked.")
                 print("   Starting a fresh Google sign-in to generate a new token...")
                 creds = None
         else:
@@ -63,12 +62,16 @@ def main():
         with open('token.pickle', 'wb') as f:
             pickle.dump(creds, f)
 
+        with open('token.json', 'w', encoding='utf-8') as f:
+            f.write(creds.to_json())
+
     print("✅ token.pickle saved!")
+    print("✅ token.json saved!")
     print()
 
-    # Encode as base64 for GitHub Secrets
-    with open('token.pickle', 'rb') as f:
-        encoded = base64.b64encode(f.read()).decode()
+    # Encode the JSON token for GitHub Secrets.
+    with open('token.json', 'r', encoding='utf-8') as f:
+        encoded = base64.b64encode(f.read().encode('utf-8')).decode()
 
     print("=" * 60)
     print("📋 NEXT STEP — Add this as a GitHub Secret:")

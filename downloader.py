@@ -19,6 +19,7 @@ import base64
 import pickle
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
+from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -59,7 +60,7 @@ def get_drive_service():
 OAUTH_REAUTH_MESSAGE = (
     "Google OAuth token is expired or revoked.\n"
     "Fix:\n"
-    "1. Run auth_setup.py locally to generate a fresh token.pickle/token_b64.txt\n"
+    "1. Run auth_setup.py locally to generate a fresh token.json/token_b64.txt\n"
     "2. Update the GitHub Actions secret GOOGLE_TOKEN_B64 with the new token_b64.txt contents\n"
     "3. Re-run the workflow"
 )
@@ -72,6 +73,35 @@ def _raise_oauth_error(exc):
         raise RuntimeError(OAUTH_REAUTH_MESSAGE) from exc
     raise exc
 
+
+def _load_oauth_credentials_from_bytes(raw_bytes):
+    """Load OAuth credentials from either pickle bytes or authorized-user JSON."""
+    try:
+        return pickle.loads(raw_bytes)
+    except Exception:
+        pass
+
+    try:
+        token_info = json.loads(raw_bytes.decode('utf-8'))
+    except Exception as exc:
+        raise RuntimeError(
+            "GOOGLE_TOKEN_B64 is not a valid OAuth token export.\n"
+            "Re-run auth_setup.py locally and replace the GitHub secret with token_b64.txt."
+        ) from exc
+
+    if not isinstance(token_info, dict):
+        raise RuntimeError(
+            "GOOGLE_TOKEN_B64 decoded successfully, but its contents are not a supported OAuth token format."
+        )
+
+    if token_info.get("type") == "authorized_user" or "refresh_token" in token_info:
+        return Credentials.from_authorized_user_info(token_info)
+
+    raise RuntimeError(
+        "GOOGLE_TOKEN_B64 looks like JSON, but not an OAuth user token.\n"
+        "Make sure you pasted token_b64.txt from auth_setup.py, not credentials.json or a service account key."
+    )
+
 def get_oauth_credentials():
     """
     Load OAuth credentials for uploading to Drive and sending Gmail.
@@ -82,7 +112,10 @@ def get_oauth_credentials():
 
     token_b64 = os.environ.get('GOOGLE_TOKEN_B64')
     if token_b64:
-        creds = pickle.loads(base64.b64decode(token_b64))
+        creds = _load_oauth_credentials_from_bytes(base64.b64decode(token_b64))
+    elif os.path.exists('token.json'):
+        with open('token.json', 'r', encoding='utf-8') as f:
+            creds = Credentials.from_authorized_user_info(json.load(f))
     elif os.path.exists('token.pickle'):
         with open('token.pickle', 'rb') as f:
             creds = pickle.load(f)
@@ -96,7 +129,7 @@ def get_oauth_credentials():
     if not creds or not creds.valid:
         raise RuntimeError(
             "No valid OAuth credentials found.\n"
-            "Run auth_setup.py locally to generate token.pickle,\n"
+            "Run auth_setup.py locally to generate token.json/token_b64.txt,\n"
             "then encode it as GOOGLE_TOKEN_B64 in GitHub Secrets."
         )
     return creds
