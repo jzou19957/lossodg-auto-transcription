@@ -2,6 +2,12 @@ import os
 from faster_whisper import WhisperModel
 
 
+def _should_log_segments():
+    """Allow verbose per-segment logs only when explicitly enabled."""
+    value = os.environ.get("VERBOSE_TRANSCRIPT_LOGS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def format_timestamp(seconds):
     """Convert seconds float to SRT timestamp HH:MM:SS,mmm"""
     h = int(seconds // 3600)
@@ -33,6 +39,9 @@ def transcribe_to_srt(video_path, output_dir='./output', model_size='medium'):
     )
 
     print(f"   Language detected: {info.language} ({info.language_probability:.0%} confidence)")
+    verbose_segments = _should_log_segments()
+    if verbose_segments:
+        print("   Verbose transcript logging enabled")
 
     segment_count = 0
     with open(srt_path, 'w', encoding='utf-8') as f:
@@ -42,7 +51,8 @@ def transcribe_to_srt(video_path, output_dir='./output', model_size='medium'):
             text = segment.text.strip()
             f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             segment_count += 1
-            print(f"   [{start}] {text[:70]}{'...' if len(text) > 70 else ''}")
+            if verbose_segments:
+                print(f"   [{start}] {text[:70]}{'...' if len(text) > 70 else ''}")
 
     print(f"✅ SRT saved: {srt_path} ({segment_count} segments)")
     return srt_path, base_name

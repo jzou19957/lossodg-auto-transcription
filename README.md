@@ -48,6 +48,8 @@ A browser window opens → log in with your Google account → authorize both Dr
 
 This creates `token.pickle` and `token_b64.txt`.
 
+If GitHub Actions later fails with `invalid_grant` or `Token has been expired or revoked`, run `python auth_setup.py` again and replace the `GOOGLE_TOKEN_B64` repository secret with the new `token_b64.txt` value.
+
 ### Step 3 — Add GitHub Secrets
 
 In your GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**:
@@ -109,7 +111,7 @@ video-to-subtitles/
 
 - **Never commit** `credentials.json`, `token.pickle`, or `token_b64.txt`
 - These are already in `.gitignore` for safety
-- The `GOOGLE_TOKEN_B64` secret expires after ~6 months — re-run `auth_setup.py` to refresh
+- The `GOOGLE_TOKEN_B64` secret can stop working if Google revokes the refresh token — re-run `auth_setup.py` and update the secret when that happens
 
 ---
 

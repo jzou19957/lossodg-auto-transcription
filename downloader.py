@@ -18,8 +18,10 @@ import json
 import base64
 import pickle
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaIoBaseUpload
 
 
@@ -54,6 +56,22 @@ def get_drive_service():
 
 # ── OAuth Auth (uploading + Gmail) ────────────────────────────────────────────
 
+OAUTH_REAUTH_MESSAGE = (
+    "Google OAuth token is expired or revoked.\n"
+    "Fix:\n"
+    "1. Run auth_setup.py locally to generate a fresh token.pickle/token_b64.txt\n"
+    "2. Update the GitHub Actions secret GOOGLE_TOKEN_B64 with the new token_b64.txt contents\n"
+    "3. Re-run the workflow"
+)
+
+
+def _raise_oauth_error(exc):
+    """Convert Google auth failures into a clear remediation message."""
+    message = str(exc)
+    if "invalid_grant" in message or "expired or revoked" in message:
+        raise RuntimeError(OAUTH_REAUTH_MESSAGE) from exc
+    raise exc
+
 def get_oauth_credentials():
     """
     Load OAuth credentials for uploading to Drive and sending Gmail.
@@ -70,7 +88,10 @@ def get_oauth_credentials():
             creds = pickle.load(f)
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            _raise_oauth_error(exc)
 
     if not creds or not creds.valid:
         raise RuntimeError(
@@ -173,11 +194,14 @@ def upload_srt_to_drive(srt_path, folder_id):
     file_metadata = {'name': file_name, 'parents': [folder_id]}
     media = MediaFileUpload(srt_path, mimetype='text/plain', resumable=True)
 
-    uploaded = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id, name'
-    ).execute()
+    try:
+        uploaded = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, name'
+        ).execute()
+    except (RefreshError, HttpError) as exc:
+        _raise_oauth_error(exc)
 
     print(f"☁️  Uploaded to Drive: {uploaded['name']} (id: {uploaded['id']})")
     return uploaded['id']
@@ -201,10 +225,13 @@ def mark_as_sent(base_name, folder_id):
     )
     file_metadata = {'name': sent_name, 'parents': [folder_id]}
 
-    uploaded = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id, name'
-    ).execute()
+    try:
+        uploaded = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, name'
+        ).execute()
+    except (RefreshError, HttpError) as exc:
+        _raise_oauth_error(exc)
 
     print(f"📌 Completion marker uploaded: {uploaded['name']}")

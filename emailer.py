@@ -4,7 +4,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-from downloader import get_gmail_service
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
+from downloader import get_gmail_service, _raise_oauth_error
 
 
 def send_srt_email(srt_path, video_name, recipient_email):
@@ -45,5 +47,8 @@ Video-to-Subtitles Bot (GitHub Actions)
         msg.attach(part)
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service.users().messages().send(userId='me', body={'raw': raw}).execute()
+    try:
+        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+    except (RefreshError, HttpError) as exc:
+        _raise_oauth_error(exc)
     print(f"📧 Email sent → {recipient_email}")
