@@ -1,42 +1,153 @@
+# ============================================================
+#  Video to Subtitles — GitHub Actions Workflow
+# ============================================================
+#  Checks for new video at 4 specific Central Time windows:
+#    • 10:50 AM CT  (video usually ready by here)
+#    • 11:30 AM CT
+#    • 12:00 PM CT
+#    • 1:00  PM CT
+#
+#  DST-SAFE: Both CDT (UTC-5) and CST (UTC-6) UTC equivalents
+#  are scheduled so this works year-round without manual edits.
+#  A lightweight check step cancels early if the job fires at
+#  an off-season UTC time that doesn't match a CT window.
+#
+#  CDT (UTC-5) active ~Mar–Nov:  15:50 | 16:30 | 17:00 | 18:00
+#  CST (UTC-6) active ~Nov–Mar:  16:50 | 17:30 | 18:00 | 19:00
+#  (18:00 UTC is shared — 1 PM CDT and 12 PM CST)
+# ============================================================
+
 name: Video to Subtitles
 
 on:
   schedule:
-    # Runs every 5 minutes, Mon–Fri (active hours check is done in main.py)
-    # GitHub Actions cron is UTC — 10am–5pm CT = 3pm–10pm UTC (CST) / 2pm–9pm UTC (CDT)
-    # We schedule broadly (2pm–10pm UTC) and let main.py enforce the exact CT window
-    - cron: '*/5 14-22 * * 1-5'
+    # ── CDT runs (UTC-5, ~Mar–Nov) ──────────────────────────
+    - cron: '50 15 * * 1-5'   # 10:50 AM CDT
+    - cron: '30 16 * * 1-5'   # 11:30 AM CDT
+    - cron: '0  17 * * 1-5'   # 12:00 PM CDT
+    - cron: '0  18 * * 1-5'   # 1:00  PM CDT  ← also 12:00 PM CST
 
-  # Allow manual trigger from GitHub Actions UI for testing
+    # ── CST runs (UTC-6, ~Nov–Mar) ──────────────────────────
+    - cron: '50 16 * * 1-5'   # 10:50 AM CST
+    - cron: '30 17 * * 1-5'   # 11:30 AM CST
+    - cron: '0  19 * * 1-5'   # 1:00  PM CST
+
+  # Manual trigger from GitHub Actions UI
   workflow_dispatch:
 
 jobs:
   transcribe:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # Max 1hr per run (long videos)
+    timeout-minutes: 60   # Max 1 hr per run (long videos)
 
     steps:
+      # ── 1. Verify this run is within a valid CT check window ──
+      #
+      #  Because we schedule both CDT and CST UTC times year-round,
+      #  ~half the cron entries are "off-season" on any given day.
+      #  This step checks the actual current CT time and cancels
+      #  early (exit 0, not a failure) if we're outside all windows.
+      #
+      #  Valid windows (±10 min tolerance to absorb GH scheduling lag):
+      #    10:40–11:00 AM CT  |  11:20–11:40 AM CT
+      #    11:50 AM–12:10 PM CT  |  12:50–1:10 PM CT
+      #
+      #  workflow_dispatch always bypasses this check so you can
+      #  trigger manually at any time for testing.
+      - name: Check CT time window
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          # Detect current UTC offset for Central Time (CDT=-5, CST=-6)
+          # by checking whether the US observes DST today via zdump
+          OFFSET=$(python3 - <<'PYEOF'
+          import datetime, zoneinfo
+          now_ct = datetime.datetime.now(zoneinfo.ZoneInfo("America/Chicago"))
+          # UTC offset in hours (e.g. -5 for CDT, -6 for CST)
+          print(int(now_ct.utcoffset().total_seconds() / 3600))
+          PYEOF
+          )
+
+          # Current UTC time as HH:MM
+          UTC_NOW=$(date -u +"%H:%M")
+          UTC_H=$(date -u +"%H" | sed 's/^0//')
+          UTC_M=$(date -u +"%M" | sed 's/^0//')
+
+          # Convert UTC → CT minutes-since-midnight
+          UTC_MINS=$(( UTC_H * 60 + UTC_M ))
+          CT_MINS=$(( UTC_MINS + OFFSET * 60 ))
+          # Wrap negative (shouldn't happen for our times, but be safe)
+          if [ $CT_MINS -lt 0 ]; then CT_MINS=$(( CT_MINS + 1440 )); fi
+
+          echo "UTC now : $UTC_NOW"
+          echo "CT offset: $OFFSET hrs"
+          echo "CT time  : $(printf '%02d:%02d' $(( CT_MINS / 60 )) $(( CT_MINS % 60 )))"
+
+          # Target windows in CT minutes-since-midnight, ±10 min tolerance
+          # 10:50 AM = 650, 11:30 AM = 690, 12:00 PM = 720, 1:00 PM = 780
+          TOLERANCE=10
+          IN_WINDOW=0
+          for TARGET in 650 690 720 780; do
+            LOW=$(( TARGET - TOLERANCE ))
+            HIGH=$(( TARGET + TOLERANCE ))
+            if [ $CT_MINS -ge $LOW ] && [ $CT_MINS -le $HIGH ]; then
+              IN_WINDOW=1
+              LABEL=""
+              case $TARGET in
+                650) LABEL="10:50 AM CT" ;;
+                690) LABEL="11:30 AM CT" ;;
+                720) LABEL="12:00 PM CT" ;;
+                780) LABEL="1:00 PM CT"  ;;
+              esac
+              echo "✅ Within valid window: $LABEL — proceeding."
+              break
+            fi
+          done
+
+          if [ $IN_WINDOW -eq 0 ]; then
+            echo "⏭️  Not within any CT check window. Skipping run (off-season UTC cron)."
+            echo "SKIP_RUN=true" >> $GITHUB_ENV
+          fi
+
+      # ── 2. Checkout ──────────────────────────────────────────
       - name: Checkout repo
+        if: env.SKIP_RUN != 'true'
         uses: actions/checkout@v4
 
+      # ── 3. Python setup ──────────────────────────────────────
       - name: Set up Python
+        if: env.SKIP_RUN != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
+      # ── 4. System deps (ffmpeg) ──────────────────────────────
       - name: Install system dependencies (ffmpeg)
+        if: env.SKIP_RUN != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
 
+      # ── 5. Python deps ───────────────────────────────────────
       - name: Install Python dependencies
+        if: env.SKIP_RUN != 'true'
         run: pip install -r requirements.txt
 
+      # ── 6. Run the transcription bot ─────────────────────────
+      #
+      #  EXIT CODE CONTRACT (important — main.py must follow this):
+      #    exit 0  → success OR video not yet available (clean skip)
+      #    exit 1+ → genuine unexpected error
+      #
+      #  If main.py exits 0 when no video is found, this workflow
+      #  shows ✅ and the next scheduled window retries automatically.
+      #  If main.py exits non-zero, the run shows ❌ and you get an
+      #  email from GitHub — so reserve that for real failures only.
       - name: Run transcription bot
+        if: env.SKIP_RUN != 'true'
         env:
-          GOOGLE_TOKEN_B64: ${{ secrets.GOOGLE_TOKEN_B64 }}
+          GOOGLE_TOKEN_B64:          ${{ secrets.GOOGLE_TOKEN_B64 }}
           GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          DRIVE_FOLDER_ID:           ${{ secrets.DRIVE_FOLDER_ID }}
+          RECIPIENT_EMAIL:           ${{ secrets.RECIPIENT_EMAIL }}
         run: python main.py
