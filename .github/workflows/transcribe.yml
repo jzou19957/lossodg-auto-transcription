@@ -1,86 +1,67 @@
 # ============================================================
 #  Video to Subtitles — GitHub Actions Workflow
 # ============================================================
-#  Runs every 30 minutes, Mon–Thu, 10:00 AM – 3:00 PM Central Time
+#  Checks for new video at 4 specific Central Time windows:
+#    • 10:50 AM CT  (video usually ready by here)
+#    • 11:30 AM CT
+#    • 12:00 PM CT
+#    • 1:00  PM CT
 #
-#  Slots: 10:00 10:30 11:00 11:30 12:00 12:30 13:00 13:30 14:00 14:30 15:00
-#         (11 checks per day × 4 days = 44 runs/week)
+#  DST-SAFE: Both CDT (UTC-5) and CST (UTC-6) UTC equivalents
+#  are scheduled so this works year-round without manual edits.
+#  A lightweight check step cancels early if the job fires at
+#  an off-season UTC time that doesn't match a CT window.
 #
-#  DST-SAFE: Both CDT (UTC-5) and CST (UTC-6) UTC equivalents are
-#  scheduled year-round. A lightweight CT window check step cancels
-#  the off-season UTC crons before doing any real work.
-#
-#  CDT (UTC-5, ~Mar–Nov):  15–20 UTC on the hour/half
-#  CST (UTC-6, ~Nov–Mar):  16–21 UTC on the hour/half
-#
-#  No UTC times overlap between CDT and CST for this schedule,
-#  so there are no shared entries — each cron is season-specific.
+#  CDT (UTC-5) active ~Mar–Nov:  15:50 | 16:30 | 17:00 | 18:00
+#  CST (UTC-6) active ~Nov–Mar:  16:50 | 17:30 | 18:00 | 19:00
+#  (18:00 UTC is shared — 1 PM CDT and 12 PM CST)
 # ============================================================
 
 name: Video to Subtitles
 
-# Cancels any in-progress run when a new one starts.
-# Prevents queue pile-up when GitHub delays cause back-to-back fires.
+# Cancel any already-running instance before starting a new one.
+# Prevents pile-up when GitHub delays cause back-to-back fires.
 concurrency:
   group: video-to-subtitles
   cancel-in-progress: true
 
 on:
   schedule:
-    # ── CDT runs (UTC-5, ~Mar–Nov) ──  Mon–Thu only (1-4) ───
-    - cron: ' 0 15 * * 1-4'   # 10:00 AM CDT
-    - cron: '30 15 * * 1-4'   # 10:30 AM CDT
-    - cron: ' 0 16 * * 1-4'   # 11:00 AM CDT
-    - cron: '30 16 * * 1-4'   # 11:30 AM CDT
-    - cron: ' 0 17 * * 1-4'   # 12:00 PM CDT
-    - cron: '30 17 * * 1-4'   # 12:30 PM CDT
-    - cron: ' 0 18 * * 1-4'   #  1:00 PM CDT
-    - cron: '30 18 * * 1-4'   #  1:30 PM CDT
-    - cron: ' 0 19 * * 1-4'   #  2:00 PM CDT
-    - cron: '30 19 * * 1-4'   #  2:30 PM CDT
-    - cron: ' 0 20 * * 1-4'   #  3:00 PM CDT
+    # ── CDT runs (UTC-5, ~Mar–Nov) ──────────────────────────
+    - cron: '50 15 * * 1-5'   # 10:50 AM CDT
+    - cron: '30 16 * * 1-5'   # 11:30 AM CDT
+    - cron: '0  17 * * 1-5'   # 12:00 PM CDT
 
-    # ── CST runs (UTC-6, ~Nov–Mar) ──  Mon–Thu only (1-4) ───
-    - cron: ' 0 16 * * 1-4'   # 10:00 AM CST
-    - cron: '30 16 * * 1-4'   # 10:30 AM CST
-    - cron: ' 0 17 * * 1-4'   # 11:00 AM CST
-    - cron: '30 17 * * 1-4'   # 11:30 AM CST
-    - cron: ' 0 18 * * 1-4'   # 12:00 PM CST
-    - cron: '30 18 * * 1-4'   # 12:30 PM CST
-    - cron: ' 0 19 * * 1-4'   #  1:00 PM CST
-    - cron: '30 19 * * 1-4'   #  1:30 PM CST
-    - cron: ' 0 20 * * 1-4'   #  2:00 PM CST
-    - cron: '30 20 * * 1-4'   #  2:30 PM CST
-    - cron: ' 0 21 * * 1-4'   #  3:00 PM CST
+    # ── Shared: 1:00 PM CDT = 12:00 PM CST ─────────────────
+    - cron: '0  18 * * 1-5'   # one entry handles both seasons
 
-  # Manual trigger — always bypasses the window check
+    # ── CST-only runs (UTC-6, ~Nov–Mar) ─────────────────────
+    - cron: '50 16 * * 1-5'   # 10:50 AM CST
+    - cron: '30 17 * * 1-5'   # 11:30 AM CST
+    - cron: '0  19 * * 1-5'   # 1:00  PM CST
+
+  # Manual trigger from GitHub Actions UI
   workflow_dispatch:
 
 jobs:
   transcribe:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # Hard ceiling; step-level limit below fires first
+    timeout-minutes: 120   # Safety ceiling only — transcription step has no timeout
 
     steps:
       # ── 1. Verify this run is within a valid CT check window ──
       #
-      #  Because CDT and CST UTC times are both scheduled year-round,
-      #  ~half the crons are "off-season" on any given day. This step
-      #  checks the actual CT clock and cancels early if we're outside
-      #  the 10:00 AM – 3:00 PM window.
-      #
-      #  Tolerance: ±20 min to absorb GitHub's scheduling lag (which
-      #  can be 15–30 min under heavy load). With 30-min slots the
-      #  windows safely overlap so no valid fire is ever dropped.
-      #
-      #  Valid CT range: 9:40 AM – 3:20 PM  (600 ±20 to 900 ±20)
-      #  Since slots are every 30 min, a ±20 min band on each target
-      #  means continuous coverage with no gaps.
+      #  Tolerance is ±25 min to handle GitHub's known scheduling
+      #  delays of up to ~30 min under heavy load.
       #
       #  workflow_dispatch always bypasses this check.
       - name: Check CT time window
         if: github.event_name != 'workflow_dispatch'
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  STEP 1/6 — Checking CT time window"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           OFFSET=$(python3 - <<'PYEOF'
           import datetime, zoneinfo
           now_ct = datetime.datetime.now(zoneinfo.ZoneInfo("America/Chicago"))
@@ -95,29 +76,36 @@ jobs:
           if [ $CT_MINS -lt 0 ]; then CT_MINS=$(( CT_MINS + 1440 )); fi
 
           CT_DISPLAY=$(printf '%02d:%02d' $(( CT_MINS / 60 )) $(( CT_MINS % 60 )))
-          echo "UTC now  : $(date -u +"%H:%M")"
-          echo "CT offset: $OFFSET hrs"
-          echo "CT time  : $CT_DISPLAY"
+          echo "  UTC now  : $(date -u +"%H:%M:%S")"
+          echo "  CT offset: $OFFSET hrs  ($([ $OFFSET -eq -5 ] && echo 'CDT' || echo 'CST'))"
+          echo "  CT time  : $CT_DISPLAY"
+          echo ""
 
-          # Targets: every 30 min from 10:00 AM (600) to 3:00 PM (900)
+          # Target windows: 10:50=650 | 11:30=690 | 12:00=720 | 1:00=780
           TOLERANCE=25
           IN_WINDOW=0
-          for TARGET in 600 630 660 690 720 750 780 810 840 870 900; do
+          for TARGET in 650 690 720 780; do
             LOW=$(( TARGET - TOLERANCE ))
             HIGH=$(( TARGET + TOLERANCE ))
             if [ $CT_MINS -ge $LOW ] && [ $CT_MINS -le $HIGH ]; then
               IN_WINDOW=1
-              LABEL=$(printf '%02d:%02d CT' $(( TARGET / 60 )) $(( TARGET % 60 )))
-              echo "✅ Within valid window: $LABEL — proceeding."
+              case $TARGET in
+                650) LABEL="10:50 AM CT" ;;
+                690) LABEL="11:30 AM CT" ;;
+                720) LABEL="12:00 PM CT" ;;
+                780) LABEL="1:00 PM CT"  ;;
+              esac
+              echo "  ✅ Within valid window: $LABEL — proceeding."
               break
             fi
           done
 
           if [ $IN_WINDOW -eq 0 ]; then
-            echo "⏭️  CT time $CT_DISPLAY is outside 10:00 AM–3:00 PM window."
-            echo "   (Off-season UTC cron firing — skipping cleanly.)"
+            echo "  ⏭️  CT time $CT_DISPLAY is outside all check windows."
+            echo "     (Off-season UTC cron firing — skipping cleanly.)"
             echo "SKIP_RUN=true" >> $GITHUB_ENV
           fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       # ── 2. Checkout ──────────────────────────────────────────
       - name: Checkout repo
@@ -136,28 +124,53 @@ jobs:
       - name: Install system dependencies (ffmpeg)
         if: env.SKIP_RUN != 'true'
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  STEP 4/6 — Installing ffmpeg"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
+          echo "  ✅ ffmpeg $(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       # ── 5. Python deps ───────────────────────────────────────
       - name: Install Python dependencies
         if: env.SKIP_RUN != 'true'
-        run: pip install -r requirements.txt
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  STEP 5/6 — Installing Python dependencies"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          pip install -r requirements.txt
+          echo "  ✅ Dependencies installed"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       # ── 6. Run the transcription bot ─────────────────────────
       #
-      #  Step timeout: 55 min. Transcription of long videos can take 30+ min.
-      #  starts clean. The 60-min job ceiling is a safety net only.
+      #  NO step-level timeout — transcription of long videos can
+      #  take 30–90+ min. The 120-min job ceiling is the only limit.
       #
       #  EXIT CODE CONTRACT (main.py must follow this):
       #    exit 0  → success OR video not yet available (clean skip)
       #    exit 1+ → genuine unexpected error → GitHub sends ❌ email
       - name: Run transcription bot
         if: env.SKIP_RUN != 'true'
-        timeout-minutes: 120
         env:
           GOOGLE_TOKEN_B64:           ${{ secrets.GOOGLE_TOKEN_B64 }}
           GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
           DRIVE_FOLDER_ID:            ${{ secrets.DRIVE_FOLDER_ID }}
           RECIPIENT_EMAIL:            ${{ secrets.RECIPIENT_EMAIL }}
-        run: python main.py
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  STEP 6/6 — Running transcription bot"
+          echo "  Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          python main.py
+          EXIT_CODE=$?
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Finished at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "  ✅ Transcription bot exited cleanly (exit 0)"
+          else
+            echo "  ❌ Transcription bot failed (exit $EXIT_CODE)"
+          fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          exit $EXIT_CODE
