@@ -100,7 +100,7 @@ jobs:
           echo "CT time  : $CT_DISPLAY"
 
           # Targets: every 30 min from 10:00 AM (600) to 3:00 PM (900)
-          TOLERANCE=20
+          TOLERANCE=25
           IN_WINDOW=0
           for TARGET in 600 630 660 690 720 750 780 810 840 870 900; do
             LOW=$(( TARGET - TOLERANCE ))
@@ -146,8 +146,7 @@ jobs:
 
       # ── 6. Run the transcription bot ─────────────────────────
       #
-      #  Step timeout: 25 min. Since we run every 30 min, killing
-      #  a hung process at 25 min ensures the next scheduled window
+      #  Step timeout: 55 min. Transcription of long videos can take 30+ min.
       #  starts clean. The 60-min job ceiling is a safety net only.
       #
       #  EXIT CODE CONTRACT (main.py must follow this):
@@ -155,7 +154,7 @@ jobs:
       #    exit 1+ → genuine unexpected error → GitHub sends ❌ email
       - name: Run transcription bot
         if: env.SKIP_RUN != 'true'
-        timeout-minutes: 25
+        timeout-minutes: 120
         env:
           GOOGLE_TOKEN_B64:           ${{ secrets.GOOGLE_TOKEN_B64 }}
           GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
